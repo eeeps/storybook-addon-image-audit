@@ -1,5 +1,5 @@
-import { useEffect } from 'storybook/preview-api';
-import { addonId, globalKey, isEnabled } from './constants.js';
+import { addons, useEffect } from 'storybook/preview-api';
+import { addonId, auditEvent, globalKey, isEnabled } from './constants.js';
 
 export const initialGlobals = { [globalKey]: false };
 
@@ -59,6 +59,31 @@ function hostedEndpoint(value) {
 
 function showImageOverlays(polyfill, hostedSizeEndpoint) {
   const overlays = new Map();
+  const channel = addons.getChannel();
+  let selectedImage;
+  let lastAudit;
+
+  function publishAudit(open = false) {
+    const entry = overlays.get(selectedImage);
+    const audit = entry ? {
+      name: selectedImage.alt.trim() || 'Selected image',
+      source: selectedImage.currentSrc,
+      crossOrigin: selectedImage.crossOrigin,
+      referrerPolicy: selectedImage.referrerPolicy,
+      rows: [
+        ['Format', entry.format],
+        ['Filesize', entry.filesize],
+        ['Resource', entry.resourceDimensions],
+        ['Layout', entry.dimensions],
+        ...entry.metrics,
+      ],
+    } : null;
+    const snapshot = JSON.stringify(audit);
+    if (open || snapshot !== lastAudit) {
+      lastAudit = snapshot;
+      channel.emit(auditEvent, { audit, open });
+    }
+  }
   const resourceInfo = new Map();
   const intrinsicSizes = new Map();
   const dimensionProbes = new Map();
@@ -73,12 +98,8 @@ function showImageOverlays(polyfill, hostedSizeEndpoint) {
     return `${dimensionFormat.format(bytes)} B`;
   }
 
-  function setText(label, text) {
-    if (label.textContent !== text) label.textContent = text;
-  }
-
   function updateMetrics(entry) {
-    const { bytes, resource, width, height, metrics } = entry;
+    const { bytes, resource, width, height } = entry;
     const density = resource && width > 0 ? resource.width / width : NaN;
     const resourceRate = bytes && resource ? bytes * 8 / (resource.width * resource.height) : NaN;
     const dpr = window.devicePixelRatio;
@@ -92,11 +113,12 @@ function showImageOverlays(polyfill, hostedSizeEndpoint) {
       ? dimensionFormat.format(value)
       : 'Unavailable';
 
-    setText(metrics, [
-      `Density: ${displayDensity} (DPR ${dprFormat.format(dpr)}×)`,
-      `Bits/resource pixel: ${format(resourceRate)}`,
-      `Bits/device pixel: ${format(deviceRate)}`,
-    ].join('\n'));
+    entry.metrics = [
+      ['Density', `${displayDensity} (DPR ${dprFormat.format(dpr)}×)`],
+      ['Bits/resource pixel', format(resourceRate)],
+      ['Bits/device pixel', format(deviceRate)],
+    ];
+    if (selectedImage && overlays.get(selectedImage) === entry) publishAudit();
   }
 
   let resolution;
@@ -110,7 +132,7 @@ function showImageOverlays(polyfill, hostedSizeEndpoint) {
   function updateDimensions(entry, width, height) {
     entry.width = width;
     entry.height = height;
-    setText(entry.dimensions, `Layout: ${dimensionFormat.format(width)} × ${dimensionFormat.format(height)} CSS px`);
+    entry.dimensions = `${dimensionFormat.format(width)} × ${dimensionFormat.format(height)} CSS px`;
     updateMetrics(entry);
   }
 
@@ -141,11 +163,11 @@ function showImageOverlays(polyfill, hostedSizeEndpoint) {
     entry.resource = resource;
     let text = 'Resource dimensions unavailable';
     if (resource) {
-      text = `Resource: ${dimensionFormat.format(resource.width)} × ${dimensionFormat.format(resource.height)} pixels`;
+      text = `${dimensionFormat.format(resource.width)} × ${dimensionFormat.format(resource.height)} pixels`;
     } else if (dimensionProbes.has(url)) {
       text = 'Reading resource dimensions…';
     }
-    setText(entry.resourceDimensions, text);
+    entry.resourceDimensions = text;
     updateMetrics(entry);
   }
 
@@ -247,8 +269,8 @@ function showImageOverlays(polyfill, hostedSizeEndpoint) {
     else if (fallbackFormat) format = `${fallbackFormat} (${fallback.method})`;
     else if (urlFormat) format = `${urlFormat} (URL hint)`;
 
-    setText(entry.format, `Format: ${format}`);
-    setText(entry.label, `Filesize: ${text}`);
+    entry.format = format;
+    entry.filesize = text;
     updateMetrics(entry);
   }
 
@@ -282,6 +304,10 @@ function showImageOverlays(polyfill, hostedSizeEndpoint) {
       resizeObserver.unobserve(image);
       remove();
       overlays.delete(image);
+      if (selectedImage === image) {
+        selectedImage = undefined;
+        publishAudit();
+      }
     }
 
     for (const image of images) {
@@ -289,7 +315,6 @@ function showImageOverlays(polyfill, hostedSizeEndpoint) {
 
       const anchor = `--${addonId}-${++nextAnchor}`;
       const overlay = document.createElement('div');
-      overlay.setAttribute('aria-hidden', 'true');
       overlay.dataset.imgInfoOverlay = anchor;
       overlay.style.cssText = `
         position: fixed;
@@ -298,31 +323,51 @@ function showImageOverlays(polyfill, hostedSizeEndpoint) {
         pointer-events: none;
         z-index: 2147483647;
       `;
-      const badge = document.createElement('span');
-      badge.style.cssText = `
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = 'ⓘ';
+      button.title = 'Open Image audit';
+      button.setAttribute('aria-label', image.alt.trim()
+        ? `Open Image audit for ${image.alt.trim()}`
+        : 'Open Image audit');
+      button.style.cssText = `
         position: absolute;
-        top: 0;
-        left: 0;
-        padding: 2px 4px;
-        white-space: nowrap;
-        color: white !important;
-        background: rgb(0 0 0 / 0.8);
-        font: 12px/1.2 system-ui, sans-serif;
+        top: 4px;
+        right: 4px;
+        display: grid;
+        place-items: center;
+        box-sizing: border-box;
+        width: 24px;
+        height: 24px;
+        min-width: 0;
+        min-height: 0;
+        margin: 0;
+        padding: 0;
+        border: 0;
+        border-radius: 50%;
+        outline: revert;
+        background: #222 !important;
+        color: #fff !important;
+        font: 16px/1 system-ui, sans-serif;
+        cursor: pointer;
+        pointer-events: auto;
       `;
-      const entry = {};
-      for (const key of ['format', 'label', 'resourceDimensions', 'dimensions', 'metrics']) {
-        const line = document.createElement('span');
-        // Story styles can set text color directly on spans.
-        line.style.setProperty('color', 'white', 'important');
-        line.style.display = 'block';
-        badge.append(line);
-        entry[key] = line;
-      }
-      entry.metrics.style.whiteSpace = 'pre';
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const previousButton = overlays.get(selectedImage)?.button;
+        previousButton?.removeAttribute('aria-current');
+        previousButton?.style.removeProperty('box-shadow');
+        selectedImage = image;
+        button.setAttribute('aria-current', 'true');
+        button.style.setProperty('box-shadow', '0 0 0 2px #fff, 0 0 0 4px #1565c0', 'important');
+        publishAudit(true);
+      });
+
+      const entry = { button };
       updateFileInfo(image, entry);
       updateResourceDimensions(image, entry);
       updateDimensions(entry, image.offsetWidth, image.offsetHeight);
-      overlay.append(badge);
+      overlay.append(button);
       resizeObserver.observe(image, { box: 'border-box' });
 
       const position = `
@@ -402,6 +447,10 @@ function showImageOverlays(polyfill, hostedSizeEndpoint) {
   observer.observe(document.body, { childList: true, subtree: true });
 
   return () => {
+    if (selectedImage) {
+      selectedImage = undefined;
+      publishAudit();
+    }
     observer.disconnect();
     timingObserver?.disconnect();
     resizeObserver.disconnect();
@@ -423,7 +472,7 @@ function reportPolyfillError(error) {
 }
 
 export const decorators = [
-  (Story, { globals, parameters, viewMode }) => {
+  (Story, { globals, id, parameters, viewMode }) => {
     const enabled = viewMode === 'story' && isEnabled(globals[globalKey]);
     const hostedSizeEndpoint = parameters?.[globalKey]?.hostedSizeEndpoint;
     useEffect(() => {
@@ -441,7 +490,7 @@ export const decorators = [
         cancelled = true;
         removeOverlays?.();
       };
-    }, [enabled, hostedSizeEndpoint]);
+    }, [enabled, hostedSizeEndpoint, id]);
     return Story();
   },
 ];

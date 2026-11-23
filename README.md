@@ -2,11 +2,11 @@
 
 Add `'storybook-addon-img-info'` to the `addons` array in `.storybook/main.js` or `.storybook/main.ts` after installing the package. To install from this checkout, run `npm install -D /path/to/storybook-addon-img-info` in your Storybook project.
 
-Click **Images** in the Canvas toolbar to toggle translucent red overlays over the preview's images. The toggle starts off. This add-on targets Storybook 10 and loads the [OddBird CSS Anchor Positioning polyfill](https://github.com/oddbird/css-anchor-positioning) when the browser lacks native support.
+Click **Images** in the Canvas toolbar to toggle translucent red overlays over the preview's images. Click the info button at the top right of an image to open its measurements in the **Image audit** panel. The panel shows a fit-to-width preview of the selected image, and a ring marks its info button in the Canvas. The toggle starts off. This add-on targets Storybook 10 and loads the [OddBird CSS Anchor Positioning polyfill](https://github.com/oddbird/css-anchor-positioning) when the browser lacks native support.
 
-Each overlay shows the selected image’s format above the size when identifiable. It prefers the original response’s MIME type, labels formats from a refetch or proxy, and marks filename or data URL guesses as **(URL hint)**.
+The panel shows the selected image’s format above the size when identifiable. It prefers the original response’s MIME type, labels formats from a refetch or proxy, and marks filename or data URL guesses as **(URL hint)**.
 
-It also shows the selected resource’s intrinsic dimensions, measured from its URL without `srcset` or `sizes`. The probe may make another image request and can read dimensions without CORS access to the response body. The overlay also shows the image’s layout width and height in CSS pixels, including padding and borders, and updates when the image resizes. It also shows the selected image file size in bytes, after removing any HTTP content encoding such as gzip. The add-on first uses Resource Timing. If it has no size for a loaded image, the add-on tries a direct CORS fetch and measures the response body. This can make another download. The label marks that result **(refetch)** because the new request can receive a different image variant. The original image URL stays in use. If all available lookups fail, the label reads **Filesize: Unavailable**.
+It also shows the selected resource’s intrinsic dimensions, measured from its URL without `srcset` or `sizes`. The probe may make another image request and can read dimensions without CORS access to the response body. The panel also shows the image’s layout width and height in CSS pixels, including padding and borders, and updates when the image resizes. It also shows the selected image file size in bytes, after removing any HTTP content encoding such as gzip. The add-on first uses Resource Timing. If it has no size for a loaded image, the add-on tries a direct CORS fetch and measures the response body. This can make another download. The label marks that result **(refetch)** because the new request can receive a different image variant. The original image URL stays in use. If all available lookups fail, the label reads **Filesize: Unavailable**.
 
 ## Optional size proxy
 
@@ -38,7 +38,7 @@ origin via CORS and return JSON such as `{ "bytes": 123456 }`. It can also retur
 after direct CORS and the local proxy, if configured. A failed request leaves
 **Filesize: Unavailable**.
 
-The overlay also reports density (resource width divided by layout
+The panel also reports density (resource width divided by layout
 width) alongside the browser’s DPR, plus bits per resource pixel and bits per device pixel. The device-pixel
 calculation uses the layout area multiplied by the current device pixel ratio
 squared. The bit rates use the displayed file size when available.
