@@ -4,22 +4,101 @@ import { addonId, globalKey, isEnabled } from './constants.js';
 export const initialGlobals = { [globalKey]: false };
 
 let nextAnchor = 0;
+const proxyHosts = new Set(
+  typeof __IMG_INFO_PROXY_HOSTS__ === 'undefined' ? [] : __IMG_INFO_PROXY_HOSTS__,
+);
 
-function showImageOverlays(polyfill) {
+async function readFallbackSize(url, signal, readSize) {
+  try {
+    const response = await fetch(url, { signal, credentials: 'omit' });
+    if (response.ok) {
+      const bytes = await readSize(response);
+      if (Number.isSafeInteger(bytes) && bytes > 0) return bytes;
+    }
+  } catch {
+    // An unavailable fallback leaves the next one eligible.
+  }
+}
+
+function hostedEndpoint(value) {
+  if (typeof value !== 'string') return;
+  try {
+    const url = new URL(value);
+    if (url.protocol === 'https:' && !url.username && !url.password) return url;
+  } catch {
+    // An invalid endpoint leaves the hosted fallback disabled.
+  }
+}
+
+function showImageOverlays(polyfill, hostedSizeEndpoint) {
   const overlays = new Map();
   const resourceSizes = new Map();
   const numberFormat = new Intl.NumberFormat();
+  const fallbackSizes = new Map();
+  const fallbackRequests = new AbortController();
+  const { signal } = fallbackRequests;
+  const hosted = hostedEndpoint(hostedSizeEndpoint);
+
+  async function requestFallbackSize(source) {
+    const readImageSize = async (response) => {
+      const type = response.headers.get('content-type');
+      if (type && !type.toLowerCase().startsWith('image/')) {
+        await response.body?.cancel();
+        return;
+      }
+      return (await response.blob()).size;
+    };
+    let bytes = await readFallbackSize(source, signal, readImageSize);
+    let method = 'refetch';
+    const endpoints = [];
+    if (source.protocol === 'https:' && proxyHosts.has(source.hostname)) {
+      endpoints.push(new URL('./__img_info_size', location.href));
+    }
+    if (hosted && source.protocol === 'https:') endpoints.push(new URL(hosted));
+
+    for (const endpoint of endpoints) {
+      if (bytes || signal.aborted) break;
+      endpoint.searchParams.set('url', source.href);
+      bytes = await readFallbackSize(endpoint, signal, async (response) => {
+        const result = await response.json();
+        return result?.bytes;
+      });
+      method = 'proxy';
+    }
+
+    if (signal.aborted) return;
+    if (bytes) fallbackSizes.set(source.href, { bytes, method });
+    for (const [image, { label }] of overlays) {
+      if (image.currentSrc === source.href) updateFileSize(image, label);
+    }
+  }
 
   function recordSizes(entries) {
-    for (const { name, decodedBodySize } of entries) {
-      resourceSizes.set(name, decodedBodySize);
+    for (const { name, decodedBodySize, initiatorType } of entries) {
+      // A separate fetch can receive a different variant of the same URL.
+      if (initiatorType !== 'fetch' && initiatorType !== 'xmlhttprequest') {
+        resourceSizes.set(name, decodedBodySize);
+      }
     }
   }
 
   function updateFileSize(image, label) {
     const url = image.currentSrc;
     const size = resourceSizes.get(url) ?? resourceSizes.get(url.split('#', 1)[0]);
-    const text = size > 0 ? `${numberFormat.format(size)} B` : 'Size unavailable';
+    let text = 'Size unavailable';
+    if (size > 0) {
+      text = `${numberFormat.format(size)} B`;
+    } else if (image.complete && image.naturalWidth > 0 && url) {
+      const source = new URL(url);
+      if (['http:', 'https:'].includes(source.protocol) && !source.username && !source.password) {
+        if (!fallbackSizes.has(source.href)) {
+          fallbackSizes.set(source.href, null);
+          void requestFallbackSize(source);
+        }
+        const fallback = fallbackSizes.get(source.href);
+        if (fallback) text = `${numberFormat.format(fallback.bytes)} B (${fallback.method})`;
+      }
+    }
     if (label.textContent !== text) label.textContent = text;
   }
 
@@ -35,7 +114,11 @@ function showImageOverlays(polyfill) {
 
   function onImageLoad({ target }) {
     const entry = overlays.get(target);
-    if (entry) updateFileSize(target, entry.label);
+    if (entry) {
+      const url = target.currentSrc;
+      recordSizes(performance.getEntriesByName(url.split('#', 1)[0], 'resource'));
+      updateFileSize(target, entry.label);
+    }
   }
 
 
@@ -153,6 +236,7 @@ function showImageOverlays(polyfill) {
   return () => {
     observer.disconnect();
     timingObserver?.disconnect();
+    fallbackRequests.abort();
     document.removeEventListener('load', onImageLoad, true);
     document.removeEventListener('error', onImageLoad, true);
     for (const { remove } of overlays.values()) remove();
@@ -164,24 +248,25 @@ function reportPolyfillError(error) {
 }
 
 export const decorators = [
-  (Story, { globals, viewMode }) => {
+  (Story, { globals, parameters, viewMode }) => {
     const enabled = viewMode === 'story' && isEnabled(globals[globalKey]);
+    const hostedSizeEndpoint = parameters?.[globalKey]?.hostedSizeEndpoint;
     useEffect(() => {
       if (!enabled || typeof document === 'undefined') return;
-      if (CSS.supports('top', 'anchor(top)')) return showImageOverlays();
+      if (CSS.supports('top', 'anchor(top)')) return showImageOverlays(undefined, hostedSizeEndpoint);
 
       let cancelled = false;
       let removeOverlays;
       import('@oddbird/css-anchor-positioning/fn')
         .then(({ default: polyfill }) => {
-          if (!cancelled) removeOverlays = showImageOverlays(polyfill);
+          if (!cancelled) removeOverlays = showImageOverlays(polyfill, hostedSizeEndpoint);
         })
         .catch(reportPolyfillError);
       return () => {
         cancelled = true;
         removeOverlays?.();
       };
-    }, [enabled]);
+    }, [enabled, hostedSizeEndpoint]);
     return Story();
   },
 ];
