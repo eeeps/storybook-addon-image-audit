@@ -2,7 +2,7 @@
 
 Add `'storybook-addon-img-info'` to the `addons` array in `.storybook/main.js` or `.storybook/main.ts` after installing the package. To install from this checkout, run `npm install -D /path/to/storybook-addon-img-info` in your Storybook project.
 
-Click **Images** in the Canvas toolbar to toggle translucent red overlays over the preview's images. Click the info button at the top right of an image to open its measurements in the **Image audit** panel. The panel shows a fit-to-width preview of the selected image, and a ring marks its info button in the Canvas. The toggle starts off. This add-on targets Storybook 10 and loads the [OddBird CSS Anchor Positioning polyfill](https://github.com/oddbird/css-anchor-positioning) when the browser lacks native support.
+Click **Images** in the Canvas toolbar to toggle translucent overlays over the preview's images. Click the rating badge at the top right of an image to open its measurements in the **Image audit** panel. The panel shows a fit-to-width preview of the selected image, and a ring marks its rating badge in the Canvas. The toggle starts off. This add-on targets Storybook 10 and loads the [OddBird CSS Anchor Positioning polyfill](https://github.com/oddbird/css-anchor-positioning) when the browser lacks native support.
 
 The panel shows the selected image’s format above the size when identifiable. It prefers the original response’s MIME type, labels formats from a refetch or proxy, and marks filename or data URL guesses as **(URL hint)**.
 
@@ -38,7 +38,14 @@ origin via CORS and return JSON such as `{ "bytes": 123456 }`. It can also retur
 after direct CORS and the local proxy, if configured. A failed request leaves
 **Filesize: Unavailable**.
 
-The panel also reports density (resource width divided by layout
-width) alongside the browser’s DPR, plus bits per resource pixel and bits per device pixel. The device-pixel
-calculation uses the layout area multiplied by the current device pixel ratio
-squared. The bit rates use the displayed file size when available.
+The panel reports density (resource width divided by layout width) alongside the browser’s DPR, plus bits per resource pixel based on the displayed file size. The Canvas overlay and its rating badge use the worse available rating. Images without a rating use a neutral tint and an **Unrated** badge.
+
+**Bits/resource pixel** uses compression ratings for JPEGs identified by
+response MIME type. Good is ≤ 1.5, Needs Improvement is > 1.5 through 2.4,
+and Poor is > 2.4. Ratings use the unrounded value. The metric’s **?** button
+opens an explanation of the calculation and thresholds.
+
+**Density** is Poor below 1× or above 2 × DPR. Good starts at 1× below DPR
+1.5 and at 1.5× otherwise, and extends through 1.5 × DPR. The remaining
+values are Needs Improvement. The thresholds treat DPR below 1 as 1.
+The metric’s **?** button shows the cutoffs for the current preview DPR.

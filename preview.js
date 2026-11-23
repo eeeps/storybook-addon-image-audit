@@ -1,5 +1,5 @@
 import { addons, useEffect } from 'storybook/preview-api';
-import { addonId, auditEvent, globalKey, isEnabled } from './constants.js';
+import { addonId, auditEvent, densityMetric, densityThresholds, globalKey, isEnabled, metricRatings, resourcePixelMetric, resourcePixelThresholds } from './constants.js';
 
 export const initialGlobals = { [globalKey]: false };
 
@@ -57,9 +57,29 @@ function hostedEndpoint(value) {
   }
 }
 
+function setAuditBadgeLabel(button, image, label) {
+  button.textContent = label;
+  const imageName = image.alt.trim();
+  const action = imageName ? `Open Image audit for ${imageName}` : 'Open Image audit';
+  const description = `${label} — ${action}`;
+  button.setAttribute('aria-label', description);
+  button.title = description;
+}
+
 function showImageOverlays(polyfill, hostedSizeEndpoint) {
   const overlays = new Map();
   const channel = addons.getChannel();
+  const badgeFont = document.createElement('style');
+  const fontUrl = new URL('./sb-common-assets/nunito-sans-bold.woff2', location.href);
+  badgeFont.textContent = `
+    @font-face {
+      font-family: "Image Audit Nunito Sans";
+      src: url(${JSON.stringify(fontUrl.href)}) format("woff2");
+      font-weight: 700;
+      font-display: swap;
+    }
+  `;
+  document.head.append(badgeFont);
   let selectedImage;
   let lastAudit;
 
@@ -70,6 +90,7 @@ function showImageOverlays(polyfill, hostedSizeEndpoint) {
       source: selectedImage.currentSrc,
       crossOrigin: selectedImage.crossOrigin,
       referrerPolicy: selectedImage.referrerPolicy,
+      dpr: entry.dpr,
       rows: [
         ['Format', entry.format],
         ['Filesize', entry.filesize],
@@ -89,8 +110,6 @@ function showImageOverlays(polyfill, hostedSizeEndpoint) {
   const dimensionProbes = new Map();
   const dimensionFormat = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
 
-  const dprFormat = new Intl.NumberFormat(undefined, { maximumSignificantDigits: 4 });
-
   function formatFilesize(bytes) {
     if (bytes >= 1e9) return `${dimensionFormat.format(bytes / 1e9)} GB`;
     if (bytes >= 1e6) return `${dimensionFormat.format(bytes / 1e6)} MB`;
@@ -99,24 +118,41 @@ function showImageOverlays(polyfill, hostedSizeEndpoint) {
   }
 
   function updateMetrics(entry) {
-    const { bytes, resource, width, height } = entry;
+    const { bytes, resource, width } = entry;
     const density = resource && width > 0 ? resource.width / width : NaN;
     const resourceRate = bytes && resource ? bytes * 8 / (resource.width * resource.height) : NaN;
     const dpr = window.devicePixelRatio;
-    const displayDensity = Number.isFinite(density)
-      ? `${dimensionFormat.format(density)}×`
-      : 'Unavailable';
-    const deviceRate = bytes && width > 0 && height > 0 && dpr > 0
-      ? bytes * 8 / (width * height * dpr ** 2)
-      : NaN;
-    const format = (value) => Number.isFinite(value)
-      ? dimensionFormat.format(value)
-      : 'Unavailable';
+    const { goodMin, goodMax, poorCutoff } = densityThresholds(dpr);
+    let densityRating;
+    if (Number.isFinite(density)) {
+      if (density < 1 || density > poorCutoff) densityRating = 'poor';
+      else if (density >= goodMin && density <= goodMax) densityRating = 'good';
+      else densityRating = 'needsImprovement';
+    }
 
+    const [goodLimit, improvementLimit] = resourcePixelThresholds;
+    let compressionRating;
+    if (entry.jpeg && Number.isFinite(resourceRate)) {
+      if (resourceRate <= goodLimit) compressionRating = 'good';
+      else if (resourceRate <= improvementLimit) compressionRating = 'needsImprovement';
+      else compressionRating = 'poor';
+    }
+
+    const worst = ['poor', 'needsImprovement', 'good']
+      .find((rating) => rating === densityRating || rating === compressionRating);
+    if (entry.rating !== worst) {
+      entry.rating = worst;
+      const rating = metricRatings[worst];
+      entry.overlay.style.backgroundColor = rating ? `${rating.color}40` : '#80808040';
+      entry.button.style.setProperty('background-color', rating?.color ?? '#222', 'important');
+      entry.button.style.setProperty('color', rating ? '#111' : '#fff', 'important');
+      setAuditBadgeLabel(entry.button, entry.image, rating?.label ?? 'Unrated');
+    }
+
+    entry.dpr = dpr;
     entry.metrics = [
-      ['Density', `${displayDensity} (DPR ${dprFormat.format(dpr)}×)`],
-      ['Bits/resource pixel', format(resourceRate)],
-      ['Bits/device pixel', format(deviceRate)],
+      [densityMetric, Number.isFinite(density) ? `${dimensionFormat.format(density)}×` : 'Unavailable', densityRating],
+      [resourcePixelMetric, Number.isFinite(resourceRate) ? dimensionFormat.format(resourceRate) : 'Unavailable', compressionRating],
     ];
     if (selectedImage && overlays.get(selectedImage) === entry) publishAudit();
   }
@@ -131,7 +167,6 @@ function showImageOverlays(polyfill, hostedSizeEndpoint) {
 
   function updateDimensions(entry, width, height) {
     entry.width = width;
-    entry.height = height;
     entry.dimensions = `${dimensionFormat.format(width)} × ${dimensionFormat.format(height)} CSS px`;
     updateMetrics(entry);
   }
@@ -269,6 +304,9 @@ function showImageOverlays(polyfill, hostedSizeEndpoint) {
     else if (fallbackFormat) format = `${fallbackFormat} (${fallback.method})`;
     else if (urlFormat) format = `${urlFormat} (URL hint)`;
 
+    entry.jpeg = size > 0
+      ? responseFormat === 'JPEG'
+      : fallbackFormat === 'JPEG' && (!responseFormat || responseFormat === 'JPEG');
     entry.format = format;
     entry.filesize = text;
     updateMetrics(entry);
@@ -319,36 +357,38 @@ function showImageOverlays(polyfill, hostedSizeEndpoint) {
       overlay.style.cssText = `
         position: fixed;
         position-visibility: anchors-visible;
-        background: rgb(100% 0% 0% / 0.25);
+        background: #80808040;
         pointer-events: none;
         z-index: 2147483647;
       `;
       const button = document.createElement('button');
       button.type = 'button';
-      button.textContent = 'ⓘ';
-      button.title = 'Open Image audit';
-      button.setAttribute('aria-label', image.alt.trim()
-        ? `Open Image audit for ${image.alt.trim()}`
-        : 'Open Image audit');
+      setAuditBadgeLabel(button, image, 'Unrated');
       button.style.cssText = `
         position: absolute;
-        top: 4px;
-        right: 4px;
-        display: grid;
-        place-items: center;
+        top: clamp(0px, 100% - 28px, 4px);
+        right: clamp(0px, 100% - 32px, 4px);
+        display: block;
         box-sizing: border-box;
-        width: 24px;
-        height: 24px;
+        width: max-content;
         min-width: 0;
+        max-width: calc(100% - clamp(0px, 100% - 32px, 4px));
         min-height: 0;
+        max-height: calc(100% - clamp(0px, 100% - 28px, 4px));
+        height: 28px;
         margin: 0;
-        padding: 0;
+        padding: 0 min(7px, 8%);
         border: 0;
-        border-radius: 50%;
+        border-radius: 4px;
+        text-transform: none !important;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        letter-spacing: normal;
         outline: revert;
-        background: #222 !important;
+        background-color: #222 !important;
         color: #fff !important;
-        font: 16px/1 system-ui, sans-serif;
+        font: 700 12px/1 "Image Audit Nunito Sans", "Nunito Sans", -apple-system, system-ui, sans-serif !important;
         cursor: pointer;
         pointer-events: auto;
       `;
@@ -363,7 +403,7 @@ function showImageOverlays(polyfill, hostedSizeEndpoint) {
         publishAudit(true);
       });
 
-      const entry = { button };
+      const entry = { button, image, overlay };
       updateFileInfo(image, entry);
       updateResourceDimensions(image, entry);
       updateDimensions(entry, image.offsetWidth, image.offsetHeight);
@@ -452,6 +492,7 @@ function showImageOverlays(polyfill, hostedSizeEndpoint) {
       publishAudit();
     }
     observer.disconnect();
+    badgeFont.remove();
     timingObserver?.disconnect();
     resizeObserver.disconnect();
     resolution.removeEventListener('change', onResolutionChange);
