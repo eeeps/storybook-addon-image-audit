@@ -6,14 +6,44 @@ export const initialGlobals = { [globalKey]: false };
 let nextAnchor = 0;
 
 function showImageOverlays(polyfill) {
-
   const overlays = new Map();
+  const resourceSizes = new Map();
+  const numberFormat = new Intl.NumberFormat();
+
+  function recordSizes(entries) {
+    for (const { name, decodedBodySize } of entries) {
+      resourceSizes.set(name, decodedBodySize);
+    }
+  }
+
+  function updateFileSize(image, label) {
+    const url = image.currentSrc;
+    const size = resourceSizes.get(url) ?? resourceSizes.get(url.split('#', 1)[0]);
+    const text = size > 0 ? `${numberFormat.format(size)} B` : 'Size unavailable';
+    if (label.textContent !== text) label.textContent = text;
+  }
+
+  recordSizes(performance.getEntriesByType('resource'));
+  let timingObserver;
+  if (globalThis.PerformanceObserver?.supportedEntryTypes?.includes('resource')) {
+    timingObserver = new PerformanceObserver((list) => {
+      recordSizes(list.getEntries());
+      for (const [image, { label }] of overlays) updateFileSize(image, label);
+    });
+    timingObserver.observe({ type: 'resource', buffered: true });
+  }
+
+  function onImageLoad({ target }) {
+    const entry = overlays.get(target);
+    if (entry) updateFileSize(target, entry.label);
+  }
+
 
   function syncOverlays() {
     const images = new Set(document.querySelectorAll('img'));
     const newStyles = [];
 
-    for (const [image, remove] of overlays) {
+    for (const [image, { remove }] of overlays) {
       if (images.has(image)) continue;
       remove();
       overlays.delete(image);
@@ -33,6 +63,20 @@ function showImageOverlays(polyfill) {
         pointer-events: none;
         z-index: 2147483647;
       `;
+      const label = document.createElement('span');
+      label.style.cssText = `
+        position: absolute;
+        top: 0;
+        left: 0;
+        padding: 2px 4px;
+        white-space: nowrap;
+        color: white;
+        background: rgb(0 0 0 / 0.8);
+        font: 12px/1.2 system-ui, sans-serif;
+      `;
+      updateFileSize(image, label);
+      overlay.append(label);
+
       const position = `
         position-anchor: ${anchor};
         top: anchor(top);
@@ -54,12 +98,13 @@ function showImageOverlays(polyfill) {
         document.head.append(style);
         document.body.append(overlay);
         newStyles.push(style);
-        overlays.set(image, () => {
+        const remove = () => {
           overlay.remove();
           style.remove();
           if (originalMarker === null) image.removeAttribute(marker);
           else image.setAttribute(marker, originalMarker);
-        });
+        };
+        overlays.set(image, { label, remove });
         continue;
       }
 
@@ -77,7 +122,7 @@ function showImageOverlays(polyfill) {
       overlay.style.cssText += position;
       document.body.append(overlay);
 
-      overlays.set(image, () => {
+      const remove = () => {
         overlay.remove();
         if (image.getAttribute('style') === anchoredStyle) {
           if (originalStyle === null) image.removeAttribute('style');
@@ -89,7 +134,8 @@ function showImageOverlays(polyfill) {
         if (originalStyle === null && image.style.length === 0) {
           image.removeAttribute('style');
         }
-      });
+      };
+      overlays.set(image, { label, remove });
     }
 
     if (newStyles.length) {
@@ -99,12 +145,17 @@ function showImageOverlays(polyfill) {
   }
 
   syncOverlays();
+  document.addEventListener('load', onImageLoad, true);
+  document.addEventListener('error', onImageLoad, true);
   const observer = new MutationObserver(syncOverlays);
   observer.observe(document.body, { childList: true, subtree: true });
 
   return () => {
     observer.disconnect();
-    for (const remove of overlays.values()) remove();
+    timingObserver?.disconnect();
+    document.removeEventListener('load', onImageLoad, true);
+    document.removeEventListener('error', onImageLoad, true);
+    for (const { remove } of overlays.values()) remove();
   };
 }
 
