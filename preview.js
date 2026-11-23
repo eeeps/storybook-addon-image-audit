@@ -92,10 +92,10 @@ function showImageOverlays(polyfill, hostedSizeEndpoint) {
       referrerPolicy: selectedImage.referrerPolicy,
       dpr: entry.dpr,
       rows: [
-        ['Format', entry.format],
-        ['Filesize', entry.filesize],
-        ['Resource', entry.resourceDimensions],
-        ['Layout', entry.dimensions],
+        ['Format', entry.format, { qualifier: entry.formatQualifier }],
+        ['Filesize', entry.filesize, { qualifier: entry.filesizeQualifier }],
+        ['Resource dimensions', entry.resourceDimensions],
+        ['Layout dimensions', entry.dimensions],
         ...entry.metrics,
       ],
     } : null;
@@ -110,21 +110,32 @@ function showImageOverlays(polyfill, hostedSizeEndpoint) {
   const dimensionProbes = new Map();
   const dimensionFormat = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
 
+  const oneDecimalFormat = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 });
+
   function formatFilesize(bytes) {
-    if (bytes >= 1e9) return `${dimensionFormat.format(bytes / 1e9)} GB`;
-    if (bytes >= 1e6) return `${dimensionFormat.format(bytes / 1e6)} MB`;
-    if (bytes >= 1e3) return `${dimensionFormat.format(bytes / 1e3)} kB`;
-    return `${dimensionFormat.format(bytes)} B`;
+    if (bytes >= 999_950_000) return `${oneDecimalFormat.format(bytes / 1e9)} GB`;
+    if (bytes >= 999_950) return `${oneDecimalFormat.format(bytes / 1e6)} MB`;
+    if (bytes >= 1_000) return `${oneDecimalFormat.format(bytes / 1e3)} kB`;
+    return `${oneDecimalFormat.format(bytes)} B`;
   }
 
   function updateMetrics(entry) {
     const { bytes, resource, width } = entry;
+    const isSvg = entry.format === 'SVG';
+    if (entry.overlay.hidden !== isSvg) entry.overlay.hidden = isSvg;
+    if (isSvg && selectedImage === entry.image) {
+      selectedImage = undefined;
+      entry.button.removeAttribute('aria-current');
+      entry.button.style.removeProperty('box-shadow');
+      publishAudit();
+    }
+
     const density = resource && width > 0 ? resource.width / width : NaN;
     const resourceRate = bytes && resource ? bytes * 8 / (resource.width * resource.height) : NaN;
     const dpr = window.devicePixelRatio;
     const { goodMin, goodMax, poorCutoff } = densityThresholds(dpr);
     let densityRating;
-    if (Number.isFinite(density)) {
+    if (!isSvg && Number.isFinite(density)) {
       if (density < 1 || density > poorCutoff) densityRating = 'poor';
       else if (density >= goodMin && density <= goodMax) densityRating = 'good';
       else densityRating = 'needsImprovement';
@@ -132,7 +143,7 @@ function showImageOverlays(polyfill, hostedSizeEndpoint) {
 
     const [goodLimit, improvementLimit] = resourcePixelThresholds;
     let compressionRating;
-    if (entry.jpeg && Number.isFinite(resourceRate)) {
+    if (!isSvg && Number.isFinite(resourceRate)) {
       if (resourceRate <= goodLimit) compressionRating = 'good';
       else if (resourceRate <= improvementLimit) compressionRating = 'needsImprovement';
       else compressionRating = 'poor';
@@ -143,16 +154,16 @@ function showImageOverlays(polyfill, hostedSizeEndpoint) {
     if (entry.rating !== worst) {
       entry.rating = worst;
       const rating = metricRatings[worst];
-      entry.overlay.style.backgroundColor = rating ? `${rating.color}40` : '#80808040';
-      entry.button.style.setProperty('background-color', rating?.color ?? '#222', 'important');
+      entry.overlay.style.backgroundColor = `rgb(${rating?.rgb ?? '128 128 128'} / 0.3625)`;
+      entry.button.style.setProperty('background-color', rating ? `rgb(${rating.rgb})` : '#222', 'important');
       entry.button.style.setProperty('color', rating ? '#111' : '#fff', 'important');
       setAuditBadgeLabel(entry.button, entry.image, rating?.label ?? 'Unrated');
     }
 
     entry.dpr = dpr;
     entry.metrics = [
-      [densityMetric, Number.isFinite(density) ? `${dimensionFormat.format(density)}×` : 'Unavailable', densityRating],
-      [resourcePixelMetric, Number.isFinite(resourceRate) ? dimensionFormat.format(resourceRate) : 'Unavailable', compressionRating],
+      [densityMetric, Number.isFinite(density) ? `${dimensionFormat.format(density)}×` : 'Unavailable', { rating: densityRating }],
+      [resourcePixelMetric, Number.isFinite(resourceRate) ? dimensionFormat.format(resourceRate) : 'Unavailable', { rating: compressionRating }],
     ];
     if (selectedImage && overlays.get(selectedImage) === entry) publishAudit();
   }
@@ -167,7 +178,7 @@ function showImageOverlays(polyfill, hostedSizeEndpoint) {
 
   function updateDimensions(entry, width, height) {
     entry.width = width;
-    entry.dimensions = `${dimensionFormat.format(width)} × ${dimensionFormat.format(height)} CSS px`;
+    entry.dimensions = `${oneDecimalFormat.format(width)} × ${oneDecimalFormat.format(height)} CSS px`;
     updateMetrics(entry);
   }
 
@@ -292,23 +303,17 @@ function showImageOverlays(polyfill, hostedSizeEndpoint) {
         fallback = fallbackInfo.get(source.href);
         if (fallback) {
           entry.bytes = fallback.bytes;
-          text = `${formatFilesize(fallback.bytes)} (${fallback.method})`;
+          text = formatFilesize(fallback.bytes);
         }
       }
     }
     const responseFormat = formatFromContentType(timing?.contentType);
     const fallbackFormat = formatFromContentType(fallback?.contentType);
     const urlFormat = source && formatFromUrl(source);
-    let format = 'Unknown';
-    if (responseFormat) format = responseFormat;
-    else if (fallbackFormat) format = `${fallbackFormat} (${fallback.method})`;
-    else if (urlFormat) format = `${urlFormat} (URL hint)`;
-
-    entry.jpeg = size > 0
-      ? responseFormat === 'JPEG'
-      : fallbackFormat === 'JPEG' && (!responseFormat || responseFormat === 'JPEG');
-    entry.format = format;
+    entry.format = responseFormat ?? fallbackFormat ?? urlFormat ?? 'Unknown';
+    entry.formatQualifier = responseFormat ? undefined : fallbackFormat ? fallback.method : urlFormat ? 'URL hint' : undefined;
     entry.filesize = text;
+    entry.filesizeQualifier = fallback?.method;
     updateMetrics(entry);
   }
 
@@ -357,7 +362,7 @@ function showImageOverlays(polyfill, hostedSizeEndpoint) {
       overlay.style.cssText = `
         position: fixed;
         position-visibility: anchors-visible;
-        background: #80808040;
+        background: rgb(128 128 128 / 0.25);
         pointer-events: none;
         z-index: 2147483647;
       `;
@@ -378,7 +383,7 @@ function showImageOverlays(polyfill, hostedSizeEndpoint) {
         height: 28px;
         margin: 0;
         padding: 0 min(7px, 8%);
-        border: 0;
+        border: 1px solid rgb(255 255 255 / 0.85);
         border-radius: 4px;
         text-transform: none !important;
         overflow: hidden;

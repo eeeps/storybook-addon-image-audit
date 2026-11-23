@@ -1,4 +1,4 @@
-import { createElement, useId, useState, useSyncExternalStore } from 'react';
+import { Fragment, createElement, useId, useState, useSyncExternalStore } from 'react';
 import { AddonPanel, ToggleButton } from 'storybook/internal/components';
 import { addons, types, useGlobals } from 'storybook/manager-api';
 import { addonId, auditEvent, auditPanelId, densityMetric, densityThresholds, globalKey, isEnabled, metricRatings, resourcePixelMetric, resourcePixelThresholds } from './constants.js';
@@ -39,48 +39,57 @@ function AuditImage({ audit }) {
   });
 }
 
-function MetricValue({ value, rating, title, suffix, children }) {
+function AuditPopover({ title, trigger, label, children }) {
   const id = useId();
   const titleId = `${id}-title`;
 
-  return createElement('div', {
-    style: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px' },
-    onKeyDown: (event) => {
-      if (event.key !== 'Escape') return;
-      const popover = event.currentTarget.ownerDocument.getElementById(id);
-      if (!popover?.matches(':popover-open')) return;
-      event.preventDefault();
-      event.stopPropagation();
-      popover.hidePopover();
+  if (typeof HTMLElement.prototype.showPopover !== 'function') {
+    return createElement('details', {
+      style: { display: 'inline-block', maxWidth: '100%' },
     },
-  },
-    createElement('span', {
-      style: rating ? {
-        padding: '2px 6px',
-        borderRadius: '4px',
-        backgroundColor: rating.color,
-        color: '#111',
-      } : undefined,
-    }, rating ? `${value} · ${rating.label}` : value),
-    suffix && createElement('span', null, suffix),
+      createElement('summary', { style: { cursor: 'pointer' } }, trigger ?? `About ${title.toLowerCase()}`),
+      createElement('div', { style: { maxWidth: '320px', padding: '4px 0' } }, children),
+    );
+  }
+
+  function closeOnEscape(event) {
+    if (event.key !== 'Escape') return;
+    const popover = event.currentTarget.ownerDocument.getElementById(id);
+    if (!popover?.matches(':popover-open')) return;
+    event.preventDefault();
+    event.stopPropagation();
+    popover.hidePopover();
+  }
+
+  return createElement(Fragment, null,
     createElement('button', {
       type: 'button',
       popoverTarget: id,
-      'aria-label': `Explain ${title.toLowerCase()}`,
+      onKeyDown: closeOnEscape,
+      'aria-label': label ?? `Explain ${title.toLowerCase()}`,
       style: {
-        border: '1px solid currentColor',
-        borderRadius: '50%',
         background: 'transparent',
         color: 'inherit',
-        width: '24px',
-        height: '24px',
+        font: 'inherit',
         padding: 0,
         cursor: 'pointer',
+        ...(trigger ? {
+          border: 0,
+          textDecoration: 'underline dotted',
+          textUnderlineOffset: '2px',
+          whiteSpace: 'nowrap',
+        } : {
+          border: '1px solid currentColor',
+          borderRadius: '50%',
+          width: '24px',
+          height: '24px',
+        }),
       },
-    }, '?'),
+    }, trigger ?? '?'),
     createElement('div', {
       id,
       popover: 'auto',
+      onKeyDown: closeOnEscape,
       role: 'region',
       'aria-labelledby': titleId,
       style: {
@@ -106,6 +115,29 @@ function MetricValue({ value, rating, title, suffix, children }) {
   );
 }
 
+function MetricValue({ value, rating, title, suffix, children }) {
+  return createElement('div', {
+    style: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px' },
+  },
+    createElement('span', {
+      style: rating ? {
+        padding: '2px 6px',
+        borderRadius: '4px',
+        backgroundColor: `rgb(${rating.rgb})`,
+        color: '#111',
+      } : undefined,
+    }, rating ? `${value} · ${rating.label}` : value),
+    suffix && createElement('span', null, suffix),
+    createElement(AuditPopover, { title }, children),
+  );
+}
+
+const qualifierHelp = {
+  refetch: 'This came from a second request made by your browser. It may have received a different image variant.',
+  proxy: 'This came from a separate request made by a server. It may have received a different image variant.',
+  'URL hint': 'The format was inferred from the URL. The actual response can be a different format.',
+};
+
 function ResourcePixelValue({ value, rating }) {
   const [goodMax, improvementMax] = resourcePixelThresholds;
 
@@ -118,7 +150,7 @@ function ResourcePixelValue({ value, rating }) {
         createElement('li', null, `Needs Improvement: > ${goodMax} and ≤ ${improvementMax}`),
         createElement('li', null, `Poor: > ${improvementMax}`)),
       createElement('p', { style: { marginBottom: 0 } },
-        'These compression heuristics rate JPEGs identified by response MIME type. ',
+        'The same thresholds apply to all rated formats. SVGs are unrated. ',
         'The rating uses the value before rounding. Refetch and proxy sizes may come from a different variant.'),
   );
 }
@@ -131,7 +163,7 @@ function DensityValue({ value, rating, dpr }) {
   return createElement(MetricValue, {
     value,
     rating,
-    title: 'Density',
+    title: densityMetric,
     suffix: `(DPR ${showDensity(dpr)})`,
   },
     createElement('p', null, 'The selected resource’s width in pixels divided by the image’s layout width in CSS pixels. A density below 1× means the image is upscaled.'),
@@ -147,12 +179,22 @@ function DensityValue({ value, rating, dpr }) {
   );
 }
 
-function renderAuditValue(label, value, rating, dpr) {
+function renderAuditValue(label, value, { rating, qualifier } = {}, dpr) {
   if (label === densityMetric) {
-    return createElement(DensityValue, { value, rating, dpr });
+    return createElement(DensityValue, { value, rating: metricRatings[rating], dpr });
   }
   if (label === resourcePixelMetric) {
-    return createElement(ResourcePixelValue, { value, rating });
+    return createElement(ResourcePixelValue, { value, rating: metricRatings[rating] });
+  }
+  if (qualifier && Object.hasOwn(qualifierHelp, qualifier)) {
+    const trigger = `(${qualifier})`;
+    return createElement(Fragment, null, value, ' ',
+      createElement(AuditPopover, {
+        title: `${label} ${trigger}`,
+        trigger,
+        label: `Explain ${trigger} for ${label}`,
+      }, createElement('p', { style: { marginBottom: 0 } }, qualifierHelp[qualifier])),
+    );
   }
   return value;
 }
@@ -166,7 +208,7 @@ function ImageAuditPanel({ active }) {
           audit.source.startsWith('data:') ? 'Data URL' : audit.source),
         audit.source && createElement(AuditImage, { key: audit.source, audit }),
         createElement('dl', { style: { margin: 0 } },
-          audit.rows.map(([label, value, rating]) => createElement('div', {
+          audit.rows.map(([label, value, details]) => createElement('div', {
             key: label,
             style: {
               display: 'grid',
@@ -176,7 +218,7 @@ function ImageAuditPanel({ active }) {
             },
           },
           createElement('dt', null, label),
-          createElement('dd', { style: { margin: 0 } }, renderAuditValue(label, value, metricRatings[rating], audit.dpr)),
+          createElement('dd', { style: { margin: 0 } }, renderAuditValue(label, value, details, audit.dpr)),
           )),
         ))
     : createElement('p', { style: { padding: '16px' } },
