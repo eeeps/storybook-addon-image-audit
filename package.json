@@ -1,0 +1,32 @@
+{
+  "name": "storybook-addon-img-info",
+  "version": "0.0.1",
+  "description": "Storybook toolbar toggle that overlays images in the preview",
+  "keywords": [
+    "storybook-addons",
+    "storybook-addon",
+    "image",
+    "img",
+    "debug",
+    "performance"
+  ],
+  "license": "ISC",
+  "author": "Eric Portis",
+  "type": "module",
+  "exports": {
+    ".": "./preset.js",
+    "./preset": "./preset.js"
+  },
+  "files": [
+    "preset.js",
+    "manager.js",
+    "preview.js",
+    "constants.js"
+  ],
+  "peerDependencies": {
+    "storybook": "^10.0.0"
+  },
+  "dependencies": {
+    "@oddbird/css-anchor-positioning": "^0.10.2"
+  }
+}
