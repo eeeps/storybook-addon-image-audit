@@ -33,11 +33,44 @@ function hostedEndpoint(value) {
 function showImageOverlays(polyfill, hostedSizeEndpoint) {
   const overlays = new Map();
   const resourceSizes = new Map();
+  const intrinsicSizes = new Map();
+  const dimensionProbes = new Map();
   const numberFormat = new Intl.NumberFormat();
   const dimensionFormat = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
 
   function updateDimensions(label, width, height) {
     label.textContent = `${dimensionFormat.format(width)} × ${dimensionFormat.format(height)} CSS px`;
+  }
+
+  function updateResourceDimensions(image, label) {
+    const url = image.currentSrc;
+    if (image.complete && url && !intrinsicSizes.has(url) && !dimensionProbes.has(url)) {
+      const probe = new Image();
+      if (image.crossOrigin !== null) probe.crossOrigin = image.crossOrigin;
+      probe.referrerPolicy = image.referrerPolicy;
+
+      function finish() {
+        probe.onload = probe.onerror = null;
+        dimensionProbes.delete(url);
+        const { naturalWidth: width, naturalHeight: height } = probe;
+        intrinsicSizes.set(url, width && height
+          ? `Resource: ${dimensionFormat.format(width)} × ${dimensionFormat.format(height)} px`
+          : 'Resource dimensions unavailable');
+
+        for (const [target, { resourceDimensions }] of overlays) {
+          if (target.currentSrc === url) updateResourceDimensions(target, resourceDimensions);
+        }
+      }
+
+      dimensionProbes.set(url, probe);
+      probe.onload = probe.onerror = finish;
+      probe.src = url;
+    }
+
+    const text = intrinsicSizes.get(url) ?? (url && dimensionProbes.has(url)
+      ? 'Reading resource dimensions…'
+      : 'Resource dimensions unavailable');
+    if (label.textContent !== text) label.textContent = text;
   }
 
   const resizeObserver = new ResizeObserver((entries) => {
@@ -141,6 +174,7 @@ function showImageOverlays(polyfill, hostedSizeEndpoint) {
       const url = target.currentSrc;
       recordSizes(performance.getEntriesByName(url.split('#', 1)[0], 'resource'));
       updateFileSize(target, entry.label);
+      updateResourceDimensions(target, entry.resourceDimensions);
     }
   }
 
@@ -182,14 +216,18 @@ function showImageOverlays(polyfill, hostedSizeEndpoint) {
         font: 12px/1.2 system-ui, sans-serif;
       `;
       const label = document.createElement('span');
+      const resourceDimensions = document.createElement('span');
       const dimensions = document.createElement('span');
       // Story styles can set text color directly on spans.
       label.style.setProperty('color', 'white', 'important');
+      resourceDimensions.style.setProperty('color', 'white', 'important');
+      resourceDimensions.style.display = 'block';
       dimensions.style.setProperty('color', 'white', 'important');
       dimensions.style.display = 'block';
       updateFileSize(image, label);
+      updateResourceDimensions(image, resourceDimensions);
       updateDimensions(dimensions, image.offsetWidth, image.offsetHeight);
-      badge.append(label, dimensions);
+      badge.append(label, resourceDimensions, dimensions);
       overlay.append(badge);
       resizeObserver.observe(image, { box: 'border-box' });
 
@@ -220,7 +258,7 @@ function showImageOverlays(polyfill, hostedSizeEndpoint) {
           if (originalMarker === null) image.removeAttribute(marker);
           else image.setAttribute(marker, originalMarker);
         };
-        overlays.set(image, { label, dimensions, remove });
+        overlays.set(image, { label, resourceDimensions, dimensions, remove });
         continue;
       }
 
@@ -251,7 +289,7 @@ function showImageOverlays(polyfill, hostedSizeEndpoint) {
           image.removeAttribute('style');
         }
       };
-      overlays.set(image, { label, dimensions, remove });
+      overlays.set(image, { label, resourceDimensions, dimensions, remove });
     }
 
     if (newStyles.length) {
@@ -271,6 +309,11 @@ function showImageOverlays(polyfill, hostedSizeEndpoint) {
     timingObserver?.disconnect();
     resizeObserver.disconnect();
     fallbackRequests.abort();
+    for (const probe of dimensionProbes.values()) {
+      probe.onload = probe.onerror = null;
+      probe.removeAttribute('src');
+    }
+    dimensionProbes.clear();
     document.removeEventListener('load', onImageLoad, true);
     document.removeEventListener('error', onImageLoad, true);
     for (const { remove } of overlays.values()) remove();
