@@ -34,6 +34,29 @@ function showImageOverlays(polyfill, hostedSizeEndpoint) {
   const overlays = new Map();
   const resourceSizes = new Map();
   const numberFormat = new Intl.NumberFormat();
+  const dimensionFormat = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
+
+  function updateDimensions(label, width, height) {
+    label.textContent = `${dimensionFormat.format(width)} × ${dimensionFormat.format(height)} CSS px`;
+  }
+
+  const resizeObserver = new ResizeObserver((entries) => {
+    for (const { target, borderBoxSize } of entries) {
+      const entry = overlays.get(target);
+      if (!entry) continue;
+
+      const box = borderBoxSize?.[0];
+      if (!box) {
+        updateDimensions(entry.dimensions, target.offsetWidth, target.offsetHeight);
+        continue;
+      }
+
+      const horizontal = getComputedStyle(target).writingMode === 'horizontal-tb';
+      const width = horizontal ? box.inlineSize : box.blockSize;
+      const height = horizontal ? box.blockSize : box.inlineSize;
+      updateDimensions(entry.dimensions, width, height);
+    }
+  });
   const fallbackSizes = new Map();
   const fallbackRequests = new AbortController();
   const { signal } = fallbackRequests;
@@ -128,6 +151,7 @@ function showImageOverlays(polyfill, hostedSizeEndpoint) {
 
     for (const [image, { remove }] of overlays) {
       if (images.has(image)) continue;
+      resizeObserver.unobserve(image);
       remove();
       overlays.delete(image);
     }
@@ -146,19 +170,28 @@ function showImageOverlays(polyfill, hostedSizeEndpoint) {
         pointer-events: none;
         z-index: 2147483647;
       `;
-      const label = document.createElement('span');
-      label.style.cssText = `
+      const badge = document.createElement('span');
+      badge.style.cssText = `
         position: absolute;
         top: 0;
         left: 0;
         padding: 2px 4px;
         white-space: nowrap;
-        color: white;
+        color: white !important;
         background: rgb(0 0 0 / 0.8);
         font: 12px/1.2 system-ui, sans-serif;
       `;
+      const label = document.createElement('span');
+      const dimensions = document.createElement('span');
+      // Story styles can set text color directly on spans.
+      label.style.setProperty('color', 'white', 'important');
+      dimensions.style.setProperty('color', 'white', 'important');
+      dimensions.style.display = 'block';
       updateFileSize(image, label);
-      overlay.append(label);
+      updateDimensions(dimensions, image.offsetWidth, image.offsetHeight);
+      badge.append(label, dimensions);
+      overlay.append(badge);
+      resizeObserver.observe(image, { box: 'border-box' });
 
       const position = `
         position-anchor: ${anchor};
@@ -187,7 +220,7 @@ function showImageOverlays(polyfill, hostedSizeEndpoint) {
           if (originalMarker === null) image.removeAttribute(marker);
           else image.setAttribute(marker, originalMarker);
         };
-        overlays.set(image, { label, remove });
+        overlays.set(image, { label, dimensions, remove });
         continue;
       }
 
@@ -218,7 +251,7 @@ function showImageOverlays(polyfill, hostedSizeEndpoint) {
           image.removeAttribute('style');
         }
       };
-      overlays.set(image, { label, remove });
+      overlays.set(image, { label, dimensions, remove });
     }
 
     if (newStyles.length) {
@@ -236,6 +269,7 @@ function showImageOverlays(polyfill, hostedSizeEndpoint) {
   return () => {
     observer.disconnect();
     timingObserver?.disconnect();
+    resizeObserver.disconnect();
     fallbackRequests.abort();
     document.removeEventListener('load', onImageLoad, true);
     document.removeEventListener('error', onImageLoad, true);
