@@ -60,8 +60,8 @@ function imageSizeMiddleware(hosts) {
         redirect: 'error',
         signal: AbortSignal.timeout(5000),
       });
-      if (!image.ok || !image.body ||
-          !image.headers.get('content-type')?.toLowerCase().startsWith('image/')) {
+      const contentType = image.headers.get('content-type');
+      if (!image.ok || !image.body || !contentType?.toLowerCase().startsWith('image/')) {
         await image.body?.cancel();
         return send(502, {});
       }
@@ -77,7 +77,7 @@ function imageSizeMiddleware(hosts) {
           return send(413, {});
         }
       }
-      return send(200, { bytes });
+      return send(200, { bytes, contentType });
     } catch {
       return send(502, {});
     }

@@ -4,7 +4,9 @@ Add `'storybook-addon-img-info'` to the `addons` array in `.storybook/main.js` o
 
 Click **Images** in the Canvas toolbar to toggle translucent red overlays over the preview's images. The toggle starts off. This add-on targets Storybook 10 and loads the [OddBird CSS Anchor Positioning polyfill](https://github.com/oddbird/css-anchor-positioning) when the browser lacks native support.
 
-Each overlay shows the selected resource’s intrinsic dimensions, measured from its URL without `srcset` or `sizes`. The probe may make another image request and can read dimensions without CORS access to the response body. The overlay also shows the image’s layout width and height in CSS pixels, including padding and borders, and updates when the image resizes. It also shows the selected image file size in bytes, after removing any HTTP content encoding such as gzip. The add-on first uses Resource Timing. If it has no size for a loaded image, the add-on tries a direct CORS fetch and measures the response body. This can make another download. The label marks that result **(refetch)** because the new request can receive a different image variant. The original image URL stays in use. If all available lookups fail, the label reads **Size unavailable**.
+Each overlay shows the selected image’s format above the size when identifiable. It prefers the original response’s MIME type, labels formats from a refetch or proxy, and marks filename or data URL guesses as **(URL hint)**.
+
+It also shows the selected resource’s intrinsic dimensions, measured from its URL without `srcset` or `sizes`. The probe may make another image request and can read dimensions without CORS access to the response body. The overlay also shows the image’s layout width and height in CSS pixels, including padding and borders, and updates when the image resizes. It also shows the selected image file size in bytes, after removing any HTTP content encoding such as gzip. The add-on first uses Resource Timing. If it has no size for a loaded image, the add-on tries a direct CORS fetch and measures the response body. This can make another download. The label marks that result **(refetch)** because the new request can receive a different image variant. The original image URL stays in use. If all available lookups fail, the label reads **Filesize: Unavailable**.
 
 ## Optional size proxy
 
@@ -32,6 +34,11 @@ The add-on has no default hosted service. To connect one later, set
 `parameters.imgInfo.hostedSizeEndpoint` to its HTTPS URL in `.storybook/preview.js`
 or `.storybook/preview.ts`. The add-on sends a GET with the full selected HTTPS
 image URL in the `url` query parameter. The endpoint must allow the preview
-origin via CORS and return JSON such as `{ "bytes": 123456 }`. This fallback runs
+origin via CORS and return JSON such as `{ "bytes": 123456 }`. It can also return an optional `contentType` string. This fallback runs
 after direct CORS and the local proxy, if configured. A failed request leaves
-**Size unavailable**.
+**Filesize: Unavailable**.
+
+The overlay also reports density (resource width divided by layout
+width) alongside the browser’s DPR, plus bits per resource pixel and bits per device pixel. The device-pixel
+calculation uses the layout area multiplied by the current device pixel ratio
+squared. The bit rates use the displayed file size when available.

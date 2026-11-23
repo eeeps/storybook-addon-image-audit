@@ -8,12 +8,39 @@ const proxyHosts = new Set(
   typeof __IMG_INFO_PROXY_HOSTS__ === 'undefined' ? [] : __IMG_INFO_PROXY_HOSTS__,
 );
 
-async function readFallbackSize(url, signal, readSize) {
+const formatByExtension = new Map([
+  ['jpg', 'JPEG'], ['jpeg', 'JPEG'], ['jfif', 'JPEG'], ['png', 'PNG'],
+  ['apng', 'APNG'], ['gif', 'GIF'], ['svg', 'SVG'], ['svgz', 'SVG'],
+  ['webp', 'WebP'], ['avif', 'AVIF'], ['jxl', 'JPEG XL'], ['bmp', 'BMP'],
+  ['ico', 'ICO'], ['tiff', 'TIFF'], ['tif', 'TIFF'], ['heic', 'HEIC'], ['heif', 'HEIF'],
+]);
+
+function formatFromContentType(value) {
+  if (typeof value !== 'string') return;
+  const type = value.split(';', 1)[0].trim().toLowerCase();
+  if (!/^image\/[a-z0-9][a-z0-9.+-]*$/.test(type)) return;
+  const subtype = type.slice('image/'.length);
+  if (subtype === 'svg+xml') return 'SVG';
+  if (subtype === 'pjpeg') return 'JPEG';
+  if (subtype === 'vnd.microsoft.icon') return 'ICO';
+  return formatByExtension.get(subtype.replace(/^x-/, '')) ?? type;
+}
+
+function formatFromUrl(url) {
+  if (url.protocol === 'data:') {
+    return formatFromContentType(/^data:([^;,]*)/i.exec(url.href)?.[1]);
+  }
+  if (url.protocol === 'blob:') return;
+  const extension = /\.([a-z0-9]+)$/i.exec(url.pathname)?.[1];
+  return formatByExtension.get(extension?.toLowerCase());
+}
+
+async function readFallbackInfo(url, signal, readInfo) {
   try {
     const response = await fetch(url, { signal, credentials: 'omit' });
     if (response.ok) {
-      const bytes = await readSize(response);
-      if (Number.isSafeInteger(bytes) && bytes > 0) return bytes;
+      const info = await readInfo(response);
+      if (Number.isSafeInteger(info?.bytes) && info.bytes > 0) return info;
     }
   } catch {
     // An unavailable fallback leaves the next one eligible.
@@ -32,17 +59,62 @@ function hostedEndpoint(value) {
 
 function showImageOverlays(polyfill, hostedSizeEndpoint) {
   const overlays = new Map();
-  const resourceSizes = new Map();
+  const resourceInfo = new Map();
   const intrinsicSizes = new Map();
   const dimensionProbes = new Map();
-  const numberFormat = new Intl.NumberFormat();
   const dimensionFormat = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
 
-  function updateDimensions(label, width, height) {
-    label.textContent = `${dimensionFormat.format(width)} × ${dimensionFormat.format(height)} CSS px`;
+  const dprFormat = new Intl.NumberFormat(undefined, { maximumSignificantDigits: 4 });
+
+  function formatFilesize(bytes) {
+    if (bytes >= 1e9) return `${dimensionFormat.format(bytes / 1e9)} GB`;
+    if (bytes >= 1e6) return `${dimensionFormat.format(bytes / 1e6)} MB`;
+    if (bytes >= 1e3) return `${dimensionFormat.format(bytes / 1e3)} kB`;
+    return `${dimensionFormat.format(bytes)} B`;
   }
 
-  function updateResourceDimensions(image, label) {
+  function setText(label, text) {
+    if (label.textContent !== text) label.textContent = text;
+  }
+
+  function updateMetrics(entry) {
+    const { bytes, resource, width, height, metrics } = entry;
+    const density = resource && width > 0 ? resource.width / width : NaN;
+    const resourceRate = bytes && resource ? bytes * 8 / (resource.width * resource.height) : NaN;
+    const dpr = window.devicePixelRatio;
+    const displayDensity = Number.isFinite(density)
+      ? `${dimensionFormat.format(density)}×`
+      : 'Unavailable';
+    const deviceRate = bytes && width > 0 && height > 0 && dpr > 0
+      ? bytes * 8 / (width * height * dpr ** 2)
+      : NaN;
+    const format = (value) => Number.isFinite(value)
+      ? dimensionFormat.format(value)
+      : 'Unavailable';
+
+    setText(metrics, [
+      `Density: ${displayDensity} (DPR ${dprFormat.format(dpr)}×)`,
+      `Bits/resource pixel: ${format(resourceRate)}`,
+      `Bits/device pixel: ${format(deviceRate)}`,
+    ].join('\n'));
+  }
+
+  let resolution;
+  function onResolutionChange() {
+    resolution?.removeEventListener('change', onResolutionChange);
+    resolution = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+    resolution.addEventListener('change', onResolutionChange);
+    for (const entry of overlays.values()) updateMetrics(entry);
+  }
+
+  function updateDimensions(entry, width, height) {
+    entry.width = width;
+    entry.height = height;
+    setText(entry.dimensions, `Layout: ${dimensionFormat.format(width)} × ${dimensionFormat.format(height)} CSS px`);
+    updateMetrics(entry);
+  }
+
+  function updateResourceDimensions(image, entry) {
     const url = image.currentSrc;
     if (image.complete && url && !intrinsicSizes.has(url) && !dimensionProbes.has(url)) {
       const probe = new Image();
@@ -53,12 +125,10 @@ function showImageOverlays(polyfill, hostedSizeEndpoint) {
         probe.onload = probe.onerror = null;
         dimensionProbes.delete(url);
         const { naturalWidth: width, naturalHeight: height } = probe;
-        intrinsicSizes.set(url, width && height
-          ? `Resource: ${dimensionFormat.format(width)} × ${dimensionFormat.format(height)} px`
-          : 'Resource dimensions unavailable');
+        intrinsicSizes.set(url, width && height ? { width, height } : null);
 
-        for (const [target, { resourceDimensions }] of overlays) {
-          if (target.currentSrc === url) updateResourceDimensions(target, resourceDimensions);
+        for (const [target, overlayEntry] of overlays) {
+          if (target.currentSrc === url) updateResourceDimensions(target, overlayEntry);
         }
       }
 
@@ -67,10 +137,16 @@ function showImageOverlays(polyfill, hostedSizeEndpoint) {
       probe.src = url;
     }
 
-    const text = intrinsicSizes.get(url) ?? (url && dimensionProbes.has(url)
-      ? 'Reading resource dimensions…'
-      : 'Resource dimensions unavailable');
-    if (label.textContent !== text) label.textContent = text;
+    const resource = intrinsicSizes.get(url);
+    entry.resource = resource;
+    let text = 'Resource dimensions unavailable';
+    if (resource) {
+      text = `Resource: ${dimensionFormat.format(resource.width)} × ${dimensionFormat.format(resource.height)} pixels`;
+    } else if (dimensionProbes.has(url)) {
+      text = 'Reading resource dimensions…';
+    }
+    setText(entry.resourceDimensions, text);
+    updateMetrics(entry);
   }
 
   const resizeObserver = new ResizeObserver((entries) => {
@@ -80,31 +156,31 @@ function showImageOverlays(polyfill, hostedSizeEndpoint) {
 
       const box = borderBoxSize?.[0];
       if (!box) {
-        updateDimensions(entry.dimensions, target.offsetWidth, target.offsetHeight);
+        updateDimensions(entry, target.offsetWidth, target.offsetHeight);
         continue;
       }
 
       const horizontal = getComputedStyle(target).writingMode === 'horizontal-tb';
       const width = horizontal ? box.inlineSize : box.blockSize;
       const height = horizontal ? box.blockSize : box.inlineSize;
-      updateDimensions(entry.dimensions, width, height);
+      updateDimensions(entry, width, height);
     }
   });
-  const fallbackSizes = new Map();
+  const fallbackInfo = new Map();
   const fallbackRequests = new AbortController();
   const { signal } = fallbackRequests;
   const hosted = hostedEndpoint(hostedSizeEndpoint);
 
   async function requestFallbackSize(source) {
-    const readImageSize = async (response) => {
+    const readImageInfo = async (response) => {
       const type = response.headers.get('content-type');
       if (type && !type.toLowerCase().startsWith('image/')) {
         await response.body?.cancel();
         return;
       }
-      return (await response.blob()).size;
+      return { bytes: (await response.blob()).size, contentType: type };
     };
-    let bytes = await readFallbackSize(source, signal, readImageSize);
+    let info = await readFallbackInfo(source, signal, readImageInfo);
     let method = 'refetch';
     const endpoints = [];
     if (source.protocol === 'https:' && proxyHosts.has(source.hostname)) {
@@ -113,57 +189,75 @@ function showImageOverlays(polyfill, hostedSizeEndpoint) {
     if (hosted && source.protocol === 'https:') endpoints.push(new URL(hosted));
 
     for (const endpoint of endpoints) {
-      if (bytes || signal.aborted) break;
+      if (info || signal.aborted) break;
       endpoint.searchParams.set('url', source.href);
-      bytes = await readFallbackSize(endpoint, signal, async (response) => {
-        const result = await response.json();
-        return result?.bytes;
-      });
+      info = await readFallbackInfo(endpoint, signal, (response) => response.json());
       method = 'proxy';
     }
 
     if (signal.aborted) return;
-    if (bytes) fallbackSizes.set(source.href, { bytes, method });
-    for (const [image, { label }] of overlays) {
-      if (image.currentSrc === source.href) updateFileSize(image, label);
+    if (info) fallbackInfo.set(source.href, { ...info, method });
+    for (const [image, entry] of overlays) {
+      if (image.currentSrc === source.href) updateFileInfo(image, entry);
     }
   }
 
-  function recordSizes(entries) {
-    for (const { name, decodedBodySize, initiatorType } of entries) {
+  function recordResourceInfo(entries) {
+    for (const { name, decodedBodySize, contentType, initiatorType } of entries) {
       // A separate fetch can receive a different variant of the same URL.
       if (initiatorType !== 'fetch' && initiatorType !== 'xmlhttprequest') {
-        resourceSizes.set(name, decodedBodySize);
+        const previous = resourceInfo.get(name);
+        resourceInfo.set(name, {
+          bytes: decodedBodySize || previous?.bytes,
+          contentType: formatFromContentType(contentType) ? contentType : previous?.contentType,
+        });
       }
     }
   }
 
-  function updateFileSize(image, label) {
+  function updateFileInfo(image, entry) {
     const url = image.currentSrc;
-    const size = resourceSizes.get(url) ?? resourceSizes.get(url.split('#', 1)[0]);
-    let text = 'Size unavailable';
+    const timing = resourceInfo.get(url) ?? resourceInfo.get(url.split('#', 1)[0]);
+    const size = timing?.bytes;
+    const source = url ? new URL(url) : undefined;
+    let fallback;
+    entry.bytes = undefined;
+    let text = 'Unavailable';
     if (size > 0) {
-      text = `${numberFormat.format(size)} B`;
-    } else if (image.complete && image.naturalWidth > 0 && url) {
-      const source = new URL(url);
+      entry.bytes = size;
+      text = formatFilesize(size);
+    } else if (image.complete && image.naturalWidth > 0 && source) {
       if (['http:', 'https:'].includes(source.protocol) && !source.username && !source.password) {
-        if (!fallbackSizes.has(source.href)) {
-          fallbackSizes.set(source.href, null);
+        if (!fallbackInfo.has(source.href)) {
+          fallbackInfo.set(source.href, null);
           void requestFallbackSize(source);
         }
-        const fallback = fallbackSizes.get(source.href);
-        if (fallback) text = `${numberFormat.format(fallback.bytes)} B (${fallback.method})`;
+        fallback = fallbackInfo.get(source.href);
+        if (fallback) {
+          entry.bytes = fallback.bytes;
+          text = `${formatFilesize(fallback.bytes)} (${fallback.method})`;
+        }
       }
     }
-    if (label.textContent !== text) label.textContent = text;
+    const responseFormat = formatFromContentType(timing?.contentType);
+    const fallbackFormat = formatFromContentType(fallback?.contentType);
+    const urlFormat = source && formatFromUrl(source);
+    let format = 'Unknown';
+    if (responseFormat) format = responseFormat;
+    else if (fallbackFormat) format = `${fallbackFormat} (${fallback.method})`;
+    else if (urlFormat) format = `${urlFormat} (URL hint)`;
+
+    setText(entry.format, `Format: ${format}`);
+    setText(entry.label, `Filesize: ${text}`);
+    updateMetrics(entry);
   }
 
-  recordSizes(performance.getEntriesByType('resource'));
+  recordResourceInfo(performance.getEntriesByType('resource'));
   let timingObserver;
   if (globalThis.PerformanceObserver?.supportedEntryTypes?.includes('resource')) {
     timingObserver = new PerformanceObserver((list) => {
-      recordSizes(list.getEntries());
-      for (const [image, { label }] of overlays) updateFileSize(image, label);
+      recordResourceInfo(list.getEntries());
+      for (const [image, entry] of overlays) updateFileInfo(image, entry);
     });
     timingObserver.observe({ type: 'resource', buffered: true });
   }
@@ -172,9 +266,9 @@ function showImageOverlays(polyfill, hostedSizeEndpoint) {
     const entry = overlays.get(target);
     if (entry) {
       const url = target.currentSrc;
-      recordSizes(performance.getEntriesByName(url.split('#', 1)[0], 'resource'));
-      updateFileSize(target, entry.label);
-      updateResourceDimensions(target, entry.resourceDimensions);
+      recordResourceInfo(performance.getEntriesByName(url.split('#', 1)[0], 'resource'));
+      updateFileInfo(target, entry);
+      updateResourceDimensions(target, entry);
     }
   }
 
@@ -215,19 +309,19 @@ function showImageOverlays(polyfill, hostedSizeEndpoint) {
         background: rgb(0 0 0 / 0.8);
         font: 12px/1.2 system-ui, sans-serif;
       `;
-      const label = document.createElement('span');
-      const resourceDimensions = document.createElement('span');
-      const dimensions = document.createElement('span');
-      // Story styles can set text color directly on spans.
-      label.style.setProperty('color', 'white', 'important');
-      resourceDimensions.style.setProperty('color', 'white', 'important');
-      resourceDimensions.style.display = 'block';
-      dimensions.style.setProperty('color', 'white', 'important');
-      dimensions.style.display = 'block';
-      updateFileSize(image, label);
-      updateResourceDimensions(image, resourceDimensions);
-      updateDimensions(dimensions, image.offsetWidth, image.offsetHeight);
-      badge.append(label, resourceDimensions, dimensions);
+      const entry = {};
+      for (const key of ['format', 'label', 'resourceDimensions', 'dimensions', 'metrics']) {
+        const line = document.createElement('span');
+        // Story styles can set text color directly on spans.
+        line.style.setProperty('color', 'white', 'important');
+        line.style.display = 'block';
+        badge.append(line);
+        entry[key] = line;
+      }
+      entry.metrics.style.whiteSpace = 'pre';
+      updateFileInfo(image, entry);
+      updateResourceDimensions(image, entry);
+      updateDimensions(entry, image.offsetWidth, image.offsetHeight);
       overlay.append(badge);
       resizeObserver.observe(image, { box: 'border-box' });
 
@@ -258,7 +352,8 @@ function showImageOverlays(polyfill, hostedSizeEndpoint) {
           if (originalMarker === null) image.removeAttribute(marker);
           else image.setAttribute(marker, originalMarker);
         };
-        overlays.set(image, { label, resourceDimensions, dimensions, remove });
+        entry.remove = remove;
+        overlays.set(image, entry);
         continue;
       }
 
@@ -289,7 +384,8 @@ function showImageOverlays(polyfill, hostedSizeEndpoint) {
           image.removeAttribute('style');
         }
       };
-      overlays.set(image, { label, resourceDimensions, dimensions, remove });
+      entry.remove = remove;
+      overlays.set(image, entry);
     }
 
     if (newStyles.length) {
@@ -299,6 +395,7 @@ function showImageOverlays(polyfill, hostedSizeEndpoint) {
   }
 
   syncOverlays();
+  onResolutionChange();
   document.addEventListener('load', onImageLoad, true);
   document.addEventListener('error', onImageLoad, true);
   const observer = new MutationObserver(syncOverlays);
@@ -308,6 +405,7 @@ function showImageOverlays(polyfill, hostedSizeEndpoint) {
     observer.disconnect();
     timingObserver?.disconnect();
     resizeObserver.disconnect();
+    resolution.removeEventListener('change', onResolutionChange);
     fallbackRequests.abort();
     for (const probe of dimensionProbes.values()) {
       probe.onload = probe.onerror = null;
