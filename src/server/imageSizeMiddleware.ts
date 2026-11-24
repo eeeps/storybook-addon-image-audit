@@ -1,42 +1,10 @@
-import { fileURLToPath } from 'node:url';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 
-export const managerEntries = (entries = []) => [
-  ...entries,
-  fileURLToPath(new URL('./manager.js', import.meta.url)),
-];
-
-export const previewAnnotations = (entries = []) => [
-  ...entries,
-  fileURLToPath(new URL('./preview.js', import.meta.url)),
-];
-
-export function viteFinal(config, { imageSizeProxyHosts = [] } = {}) {
-  if (imageSizeProxyHosts.length === 0) return config;
-  const hosts = imageSizeProxyHosts.map((host) => host.toLowerCase());
-
-  return {
-    ...config,
-    plugins: [...(config.plugins ?? []), {
-      name: 'storybook-addon-img-info-size-proxy',
-      apply: 'serve',
-      config: () => ({
-        define: { __IMG_INFO_PROXY_HOSTS__: JSON.stringify(hosts) },
-      }),
-      configureServer(server) {
-        server.middlewares.use(
-          `${server.config.base}__img_info_size`,
-          imageSizeMiddleware(new Set(hosts)),
-        );
-      },
-    }],
-  };
-}
-
-function imageSizeMiddleware(hosts) {
+export function imageSizeMiddleware(hosts: ReadonlySet<string>) {
   const maxBytes = 25 * 1024 * 1024;
 
-  return async (request, response) => {
-    const send = (status, data) => {
+  return async (request: IncomingMessage, response: ServerResponse) => {
+    const send = (status: number, data: { bytes?: number; contentType?: string }) => {
       response.writeHead(status, {
         'Content-Type': 'application/json',
         'Cache-Control': 'no-store',
@@ -45,8 +13,9 @@ function imageSizeMiddleware(hosts) {
     };
 
     if (request.method !== 'GET') return send(405, {});
-    const target = new URL(request.url, 'http://localhost').searchParams.get('url');
-    let url;
+    const target = new URL(request.url ?? '/', 'http://localhost').searchParams.get('url');
+    if (!target) return send(400, {});
+    let url: URL;
     try {
       url = new URL(target);
     } catch {

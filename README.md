@@ -1,6 +1,10 @@
 # Storybook Image Overlay
 
-Add `'storybook-addon-img-info'` to the `addons` array in `.storybook/main.js` or `.storybook/main.ts` after installing the package. To install from this checkout, run `npm install -D /path/to/storybook-addon-img-info` in your Storybook project.
+Add `'storybook-addon-img-info'` to the `addons` array in `.storybook/main.js` or
+`.storybook/main.ts` after installing the package. To use a local checkout,
+run `npm ci` and `npm run build` there first, then install the directory or
+link it from your Storybook project. You can also run `npm pack` in the add-on
+checkout and install the resulting tarball in the consuming project.
 
 Click **Images** in the Canvas toolbar to toggle translucent overlays over the preview's images. Click the rating badge at the top right of an image to open its measurements in the **Image audit** panel. The panel shows a fit-to-width preview of the selected image, and a ring marks its rating badge in the Canvas. The toggle starts off. This add-on targets Storybook 10 and loads the [OddBird CSS Anchor Positioning polyfill](https://github.com/oddbird/css-anchor-positioning) when the browser lacks native support.
 
@@ -48,3 +52,37 @@ opens an explanation of the calculation and thresholds.
 1.5 and at 1.5× otherwise, and extends through 1.5 × DPR. The remaining
 values are Needs Improvement. The thresholds treat DPR below 1 as 1.
 The metric’s **?** button shows the cutoffs for the current preview DPR.
+
+
+## Development
+
+The build follows Storybook’s [Addon Kit](https://github.com/storybookjs/addon-kit)
+with separate ESM bundles for the manager, preview, and Node preset. The
+TypeScript source lives in `src/manager` for the panel and toolbar,
+`src/preview` for Canvas overlays and image measurements, `src/server` for the
+optional Vite proxy, and `src/shared` for channel messages and rating rules.
+
+```sh
+npm ci
+npm run typecheck
+npm run build
+npm run storybook
+```
+
+Run `npm run build:watch` alongside Storybook while editing the add-on.
+`npm run build-storybook` builds the demo as a static site. `npm pack` builds the
+publishable package and includes the preview’s TypeScript declarations.
+
+## Releasing
+
+[Auto](https://intuit.github.io/auto/) uses pull-request labels to determine
+version bumps and generate release notes. Before the first release, add the
+actual GitHub repository URL to the `repository` field in `package.json`,
+push the project to GitHub, and add a publish-capable npm token as the
+repository’s `NPM_TOKEN` secret. Run `npx auto create-labels` once with a GitHub token that can manage
+repository labels, then use those labels on pull requests.
+
+Run the **Release** workflow from the default branch in GitHub Actions. It
+uses GitHub’s workflow token and runs type checking and the build before
+`auto shipit` versions and publishes the package. The workflow is manually
+dispatched.
