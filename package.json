@@ -12,6 +12,10 @@
   ],
   "license": "ISC",
   "author": "Eric Portis",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/eeeps/storybook-image-audit.git"
+  },
   "type": "module",
   "exports": {
     ".": "./dist/preset.js",
