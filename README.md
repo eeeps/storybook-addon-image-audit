@@ -1,66 +1,86 @@
-# Storybook Image Overlay
+# Storybook Addon: Image Audit
 
-Add `'storybook-addon-img-info'` to the `addons` array in `.storybook/main.js` or
-`.storybook/main.ts` after installing the package. To use a local checkout,
-run `npm ci` and `npm run build` there first, then install the directory or
-link it from your Storybook project. You can also run `npm pack` in the add-on
-checkout and install the resulting tarball in the consuming project.
+Analyze image compression and layout density within Storybook.
 
-Click **Images** in the Canvas toolbar to toggle translucent overlays over the preview's images. Click the rating badge at the top right of an image to open its measurements in the **Image audit** panel. The panel shows a fit-to-width preview of the selected image, and a ring marks its rating badge in the Canvas. The toggle starts off. This add-on targets Storybook 10 and loads the [OddBird CSS Anchor Positioning polyfill](https://github.com/oddbird/css-anchor-positioning) when the browser lacks native support.
+## Installation
 
-The panel shows the selected image’s format above the size when identifiable. It prefers the original response’s MIME type, labels formats from a refetch or proxy, and marks filename or data URL guesses as **(URL hint)**.
-
-It also shows the selected resource’s intrinsic dimensions, measured from its URL without `srcset` or `sizes`. The probe may make another image request and can read dimensions without CORS access to the response body. The panel also shows the image’s layout width and height in CSS pixels, including padding and borders, and updates when the image resizes. It also shows the selected image file size in bytes, after removing any HTTP content encoding such as gzip. The add-on first uses Resource Timing. If it has no size for a loaded image, the add-on tries a direct CORS fetch and measures the response body. This can make another download. The label marks that result **(refetch)** because the new request can receive a different image variant. The original image URL stays in use. If all available lookups fail, the label reads **Filesize: Unavailable**.
-
-## Optional size proxy
-
-For Vite-based Storybook development, opt in by listing the exact HTTPS image
-hostnames in the add-on options in `.storybook/main.ts` or `.storybook/main.js`:
-
-```js
-addons: [
-  {
-    name: 'storybook-addon-img-info',
-    options: { imageSizeProxyHosts: ['images.unsplash.com', 'images.pexels.com'] },
-  },
-],
+```sh
+yarn add -D storybook-addon-image-audit
 ```
 
-Restart Storybook after changing the list. If both Resource Timing and direct CORS fetch fail, the add-on can look up the selected URL through the dev server. It reuses the lookup while the toggle is on. The label marks the result as
-**(proxy)** because it measures a separate request, which can receive a
-different negotiated variant. The displayed image keeps its original URL.
-The endpoint accepts only the configured hostnames, rejects redirects, and
-limits responses to 25 MiB and requests to five seconds.
+```sh
+npm install -D storybook-addon-image-audit
+```
 
-## Optional hosted fallback
+```sh
+pnpm install -D storybook-addon-image-audit
+```
 
-The add-on has no default hosted service. To connect one later, set
-`parameters.imgInfo.hostedSizeEndpoint` to its HTTPS URL in `.storybook/preview.js`
-or `.storybook/preview.ts`. The add-on sends a GET with the full selected HTTPS
-image URL in the `url` query parameter. The endpoint must allow the preview
-origin via CORS and return JSON such as `{ "bytes": 123456 }`. It can also return an optional `contentType` string. This fallback runs
-after direct CORS and the local proxy, if configured. A failed request leaves
-**Filesize: Unavailable**.
+In your .storybook/main.ts file, add the following:
 
-The panel reports density (resource width divided by layout width) alongside the browser’s DPR, plus bits per resource pixel based on the displayed file size. The Canvas overlay and its rating badge use the worse available rating. SVGs are excluded from both ratings and have no Canvas badge or tint. Other images without a rating use a neutral tint and an **Unrated** badge.
+```js
+// .storybook/main.ts
+export default {
+  addons: ['storybook-addon-image-audit'],
+}
+```
 
-**Bits/resource pixel** uses the same compression ratings for all rated formats. Good is ≤ 1.5, Needs Improvement is > 1.5 through 2.5,
-and Poor is > 2.5. Ratings use the unrounded value. The metric’s **?** button
-opens an explanation of the calculation and thresholds.
 
-**Layout density** is Poor below 1× or above 2 × DPR. Good starts at 1× below DPR
-1.5 and at 1.5× otherwise, and extends through 1.5 × DPR. The remaining
-values are Needs Improvement. The thresholds treat DPR below 1 as 1.
-The metric’s **?** button shows the cutoffs for the current preview DPR.
+## Usage
+
+Click **Images** in the Canvas toolbar to toggle translucent overlays over the preview's images. Green signifies that the image is well-compressed and well-embedded ("Good"); yellow ("Needs improvement") or red ("Poor") indicate that images are sub-optimally encoded or embedded.
+
+Click the labeled rating button at the top right of an image to open its measurements in the **Image audit** panel.
+
+The panel reports the following metrics:
+
+| name                | description                                                       |
+|---------------------|-------------------------------------------------------------------|
+| Format              | MIME type                                                         |
+| Filesize            | …in bytes                                                         |
+| Resource dimensions | Dimensions of the embedded asset in pixels                        |
+| Layout dimensions   | Layout dimensions of the `<img>` that embeds the asset, in CSS px |
+| Layout density      | Resource width ÷ layout width                                     |
+| Bits/resource pixel | Filesize in bits ÷ number of resource pixels in the asset         |
+
+
+These metrics are only relevant for bitmap images, so SVGs are excluded.
+
+### Ratings
+
+Two of the metrics – bits/resource pixel and layout density – are used to evaluate the encoding and embedding efficency of the iamge. They are evaluated using the following ranges:
+
+#### Bits/resource pixel
+
+The embedded resource’s file size in bits divided by its total pixel count (resource width × height). Lower values signify an image has been “more compressed” (risking visual artifacts); higher values signify an image has been “less compressed” (risking overly-large files).
+
+Without evaluating image quality, we can only check for images that have been obviously “under-compressed“, and could likely be significantly smaller with minimal quality loss if they were encoded using modern formats (like AVIF or JPEG-XL) and/or lower quality settings. The qualitative thresholds thresholds are:
+
+| rating | value | 
+|--|--|
+| Good | x ≤ 1.5 |
+| Needs Improvement | 1.5 < x ≤ 2.5 |
+| Poor | x > 2.5 |
+
+
+#### Layout density
+
+The embedded resource’s width in pixels divided by the image’s layout width in CSS pixels. A density below the current window.devicePixelRatio (DPR) means the image is being upscaled, and may look blurry. A density above the current DPR means the image is being downscaled, wasting bytes.
+
+When image width is fluid, layout density will almost never exactly match DPR. The qualitative thresholds are:
+
+(DPR = `window.devicePixelRatio`)
+
+| rating | value (DPR below 1.5) | value (DPR 1.5 or higher) |
+|---|---|---|
+| Good | 1 ≤ x ≤ 1.5 × DPR | 1.5 ≤ x ≤ 1.5 × DPR |
+| Needs Improvement | 1.5 × DPR < x ≤ 2 × DPR | 1 ≤ x < 1.5 or 1.5 × DPR < x ≤ 2 × DPR |
+| Poor | x < 1 or x > 2 × DPR | x < 1 or x > 2 × DPR |
 
 
 ## Development
 
-The build follows Storybook’s [Addon Kit](https://github.com/storybookjs/addon-kit)
-with separate ESM bundles for the manager, preview, and Node preset. The
-TypeScript source lives in `src/manager` for the panel and toolbar,
-`src/preview` for Canvas overlays and image measurements, `src/server` for the
-optional Vite proxy, and `src/shared` for channel messages and rating rules.
+The build follows Storybook’s [Addon Kit](https://github.com/storybookjs/addon-kit) with separate ESM bundles for the manager, preview, and Node preset. The TypeScript source lives in `src/manager` for the panel and toolbar, `src/preview` for Canvas overlays and image measurements, `src/server` for the optional Vite proxy, and `src/shared` for channel messages and rating rules.
 
 ```sh
 npm ci
@@ -69,16 +89,11 @@ npm run build
 npm run storybook
 ```
 
-Run `npm run build:watch` alongside Storybook while editing the add-on.
-`npm run build-storybook` builds the demo as a static site. `npm pack` builds the
-publishable package and includes the preview’s TypeScript declarations.
+Run `npm run build:watch` alongside Storybook while editing the add-on. `npm run build-storybook` builds the demo as a static site. `npm pack` builds the publishable package and includes the preview’s TypeScript declarations.
 
 ## Releasing
 
-[Auto](https://intuit.github.io/auto/) uses pull-request labels to determine
-version bumps and generate release notes. Before the first release, add the
-actual GitHub repository URL to the `repository` field in `package.json`,
-push the project to GitHub, and add a publish-capable npm token as the
+[Auto](https://intuit.github.io/auto/) uses pull-request labels to determine version bumps and generate release notes. Before the first release, add the actual GitHub repository URL to the `repository` field in `package.json`, push the project to GitHub, and add a publish-capable npm token as the
 repository’s `NPM_TOKEN` secret. Run `npx auto create-labels` once with a GitHub token that can manage
 repository labels, then use those labels on pull requests.
 
