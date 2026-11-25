@@ -1,0 +1,20 @@
+.image-audit-demo {
+	font-family: system-ui, sans-serif;
+}
+
+.image-audit-demo p {
+	max-width: 80ch;
+}
+
+.image-audit-demo .grid {
+	display: grid;
+	grid-template-columns: repeat(3, 1fr);
+	gap: 1em;
+}
+
+.image-audit-demo img {
+	background-color: rgb(50% 50% 50% 0.1);
+	display: block;
+	width: 100%;
+	height: auto;
+}
