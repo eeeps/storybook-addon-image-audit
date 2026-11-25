@@ -1,6 +1,8 @@
-# Storybook Addon: Image Audit
+# Storybook Addon: Image Audit ([demo](https://main--6b062642db40c3b3ad205446.chromatic.com))
 
-Analyze image compression and layout density within Storybook.
+Image performance problems are often invisible. This add-on visualizes them, surfacing which images need attention, and why.
+
+![Screenshot of a Storybook with this add-on installed and enabled. There is a grid of six images, which have been labelled "Poor", "Needs improvement", or "Good". One "Needs improvement" image is selected, showing details about it in an "Image audit" side panel. There we see that its bits/resource pixel metric is "Good", but its layout density "Needs improvement"](https://o.img.rodeo/image/upload/f_avif,q_auto/lx5wftkbbelfp0mw8zzz)
 
 ## Installation
 
